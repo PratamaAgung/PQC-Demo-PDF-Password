@@ -1,0 +1,102 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: PQC Demo - AWS App Runner
+
+Parameters:
+  ImageUri:
+    Type: String
+    Description: ECR image URI (e.g., 123456789.dkr.ecr.ap-southeast-1.amazonaws.com/pqc-demo:latest)
+  Environment:
+    Type: String
+    Default: demo
+
+Resources:
+  # ============ ECR ============
+  ECRRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: pqc-demo
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {
+            "rules": [
+              {
+                "rulePriority": 1,
+                "description": "Keep last 5 images",
+                "selection": {
+                  "tagStatus": "any",
+                  "countType": "imageCountMoreThan",
+                  "countNumber": 5
+                },
+                "action": {
+                  "type": "expire"
+                }
+              }
+            ]
+          }
+
+  # ============ App Runner Access Role ============
+  AppRunnerAccessRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub pqc-demo-apprunner-access-${Environment}
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: build.apprunner.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSAppRunnerServicePolicyForECRAccess
+
+  # ============ App Runner Instance Role ============
+  AppRunnerInstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub pqc-demo-apprunner-instance-${Environment}
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: tasks.apprunner.amazonaws.com
+            Action: sts:AssumeRole
+
+  # ============ App Runner Service ============
+  AppRunnerService:
+    Type: AWS::AppRunner::Service
+    Properties:
+      ServiceName: !Sub pqc-demo-${Environment}
+      SourceConfiguration:
+        AuthenticationConfiguration:
+          AccessRoleArn: !GetAtt AppRunnerAccessRole.Arn
+        AutoDeploymentsEnabled: true
+        ImageRepository:
+          ImageIdentifier: !Ref ImageUri
+          ImageRepositoryType: ECR
+          ImageConfiguration:
+            Port: '80'
+      InstanceConfiguration:
+        Cpu: '0.25 vCPU'
+        Memory: '0.5 GB'
+        InstanceRoleArn: !GetAtt AppRunnerInstanceRole.Arn
+      HealthCheckConfiguration:
+        Protocol: HTTP
+        Path: /api/health
+        Interval: 10
+        Timeout: 5
+        HealthyThreshold: 1
+        UnhealthyThreshold: 3
+
+Outputs:
+  AppRunnerURL:
+    Description: URL aplikasi (HTTPS otomatis)
+    Value: !Sub https://${AppRunnerService.ServiceUrl}
+  ECRRepositoryUri:
+    Description: ECR Repository URI
+    Value: !GetAtt ECRRepository.RepositoryUri
+  ServiceArn:
+    Description: App Runner Service ARN
+    Value: !GetAtt AppRunnerService.ServiceArn
