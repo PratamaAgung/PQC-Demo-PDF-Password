@@ -1,13 +1,10 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: PQC Demo - AWS App Runner
+Description: PQC Demo - ECS Express Mode
 
 Parameters:
   ImageUri:
     Type: String
     Description: ECR image URI (e.g., 123456789.dkr.ecr.ap-southeast-1.amazonaws.com/pqc-demo:latest)
-  Environment:
-    Type: String
-    Default: demo
 
 Resources:
   # ============ ECR ============
@@ -36,67 +33,49 @@ Resources:
             ]
           }
 
-  # ============ App Runner Access Role ============
-  AppRunnerAccessRole:
+  # ============ IAM Roles ============
+  ECSTaskExecutionRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub pqc-demo-apprunner-access-${Environment}
+      RoleName: pqc-demo-ecs-execution-role
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
           - Effect: Allow
             Principal:
-              Service: build.apprunner.amazonaws.com
+              Service: ecs-tasks.amazonaws.com
             Action: sts:AssumeRole
       ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/service-role/AWSAppRunnerServicePolicyForECRAccess
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
 
-  # ============ App Runner Instance Role ============
-  AppRunnerInstanceRole:
+  ECSInfrastructureRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub pqc-demo-apprunner-instance-${Environment}
+      RoleName: pqc-demo-ecs-infrastructure-role
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
           - Effect: Allow
             Principal:
-              Service: tasks.apprunner.amazonaws.com
+              Service: ecs.amazonaws.com
             Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSInfrastructureRolePolicyForServiceConnectTransportLayerSecurity
 
-  # ============ App Runner Service ============
-  AppRunnerService:
-    Type: AWS::AppRunner::Service
+  # ============ CloudWatch Logs ============
+  LogGroup:
+    Type: AWS::Logs::LogGroup
     Properties:
-      ServiceName: !Sub pqc-demo-${Environment}
-      SourceConfiguration:
-        AuthenticationConfiguration:
-          AccessRoleArn: !GetAtt AppRunnerAccessRole.Arn
-        AutoDeploymentsEnabled: true
-        ImageRepository:
-          ImageIdentifier: !Ref ImageUri
-          ImageRepositoryType: ECR
-          ImageConfiguration:
-            Port: '80'
-      InstanceConfiguration:
-        Cpu: '0.25 vCPU'
-        Memory: '0.5 GB'
-        InstanceRoleArn: !GetAtt AppRunnerInstanceRole.Arn
-      HealthCheckConfiguration:
-        Protocol: HTTP
-        Path: /api/health
-        Interval: 10
-        Timeout: 5
-        HealthyThreshold: 1
-        UnhealthyThreshold: 3
+      LogGroupName: /ecs/pqc-demo
+      RetentionInDays: 7
 
 Outputs:
-  AppRunnerURL:
-    Description: URL aplikasi (HTTPS otomatis)
-    Value: !Sub https://${AppRunnerService.ServiceUrl}
   ECRRepositoryUri:
     Description: ECR Repository URI
     Value: !GetAtt ECRRepository.RepositoryUri
-  ServiceArn:
-    Description: App Runner Service ARN
-    Value: !GetAtt AppRunnerService.ServiceArn
+  ExecutionRoleArn:
+    Description: ECS Task Execution Role ARN
+    Value: !GetAtt ECSTaskExecutionRole.Arn
+  InfrastructureRoleArn:
+    Description: ECS Infrastructure Role ARN
+    Value: !GetAtt ECSInfrastructureRole.Arn

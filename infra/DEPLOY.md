@@ -1,53 +1,63 @@
-# Deployment Guide - AWS App Runner
+# Deployment Guide - ECS Express Mode
 
 ## Arsitektur
 
 ```
-Internet (HTTPS otomatis)
+Internet (HTTPS otomatis via AWS-provided URL)
     │
     ▼
-┌────────────────────┐      ┌─────────────────────┐
-│   AWS App Runner   │─────▶│  Container          │
-│   (managed)        │      │  nginx:80 → uvicorn │
-└────────────────────┘      └─────────────────────┘
+┌──────────────────────────────────────────────────┐
+│   ECS Express Mode (managed by AWS)              │
+│   ┌─────────┐    ┌──────────┐    ┌───────────┐  │
+│   │   ALB   │───▶│  Fargate │───▶│ Container │  │
+│   │ (shared)│    │  (task)  │    │ nginx:80  │  │
+│   └─────────┘    └──────────┘    └───────────┘  │
+│   + Auto Scaling + HTTPS + Health Check          │
+└──────────────────────────────────────────────────┘
 ```
 
-Tidak perlu VPC, ALB, NAT Gateway, atau ECS Cluster.
-App Runner meng-handle semuanya termasuk HTTPS, scaling, dan health check.
+ECS Express Mode otomatis provision:
+- ECS Cluster + Fargate tasks
+- ALB (shared, dibagi sampai 25 services)
+- Auto scaling
+- HTTPS dengan AWS-provided URL
+- Networking & security groups
+
+Kita hanya perlu sediakan: container image, execution role, infrastructure role.
 
 ## Estimasi Biaya
 
 | Resource | Spec | ~Biaya/bulan |
 |----------|------|-------------|
-| App Runner | 0.25 vCPU, 0.5GB RAM | ~$5-7 (active) |
-| App Runner (idle) | auto-pause | ~$0 jika tidak ada traffic |
+| Fargate | 0.25 vCPU, 0.5GB RAM, 1 task | ~$8 |
+| ALB (shared) | dibagi max 25 services | ~$1-5 |
 | ECR | < 500MB | ~$0.05 |
-| **Total** | | **~$5-7/bulan** |
+| CloudWatch Logs | minimal | ~$1 |
+| **Total** | | **~$10-14/bulan** |
 
-App Runner hanya charge saat ada traffic. Saat idle, biayanya hampir nol.
+ALB di-share oleh ECS Express Mode, jadi biayanya jauh lebih murah
+dibanding dedicated ALB (~$22/bulan).
 
 ## Prerequisites
 
-1. AWS CLI configured
-2. Docker (untuk build lokal/pertama kali)
-3. GitHub repository dengan secrets:
+1. AWS CLI v2 (terbaru, support ECS Express)
+2. Docker
+3. GitHub repo dengan secrets:
    - `AWS_ACCESS_KEY_ID`
    - `AWS_SECRET_ACCESS_KEY`
 
 ## Step-by-Step Deployment
 
-### 1. Deploy Infrastructure (satu kali)
+### 1. Deploy IAM Roles & ECR (satu kali)
 
 ```bash
 export AWS_REGION=ap-southeast-1
-export AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
 
-# Deploy CloudFormation
 aws cloudformation deploy \
   --template-file infra/cloudformation.yml \
-  --stack-name pqc-demo \
+  --stack-name pqc-demo-infra \
   --parameter-overrides \
-    ImageUri="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/pqc-demo:latest" \
+    ImageUri="placeholder" \
   --capabilities CAPABILITY_NAMED_IAM \
   --region $AWS_REGION
 ```
@@ -55,6 +65,8 @@ aws cloudformation deploy \
 ### 2. Build & Push image pertama kali
 
 ```bash
+export AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+
 # Login ECR
 aws ecr get-login-password --region $AWS_REGION | \
   docker login --username AWS --password-stdin ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com
@@ -65,43 +77,51 @@ docker tag pqc-demo:latest ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com
 docker push ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/pqc-demo:latest
 ```
 
-### 3. Akses Aplikasi
+### 3. Create ECS Express Service (satu kali)
 
 ```bash
-# Dapatkan URL (sudah HTTPS!)
-aws cloudformation describe-stacks \
-  --stack-name pqc-demo \
-  --query 'Stacks[0].Outputs[?OutputKey==`AppRunnerURL`].OutputValue' \
-  --output text
+EXECUTION_ROLE="arn:aws:iam::${AWS_ACCOUNT_ID}:role/pqc-demo-ecs-execution-role"
+INFRA_ROLE="arn:aws:iam::${AWS_ACCOUNT_ID}:role/pqc-demo-ecs-infrastructure-role"
+IMAGE_URI="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/pqc-demo:latest"
+
+aws ecs create-express-gateway-service \
+  --primary-container "image=${IMAGE_URI},port=80,healthCheckPath=/api/health" \
+  --execution-role-arn $EXECUTION_ROLE \
+  --infrastructure-role-arn $INFRA_ROLE \
+  --monitor-resources
 ```
 
-URL berbentuk: `https://xxxxx.ap-southeast-1.awsapprunner.com`
+Tunggu beberapa menit. ECS Express akan provision semua infrastructure otomatis.
 
-### 4. CI/CD (otomatis)
+### 4. Akses Aplikasi
+
+Setelah provisioning selesai, URL tersedia di output CLI atau di ECS Console.
+Format: `https://xxxxx.ap-southeast-1.amazonaws.com`
+
+### 5. CI/CD (otomatis setelah setup)
 
 Setiap push ke `main`:
 1. GitHub Actions build Docker image
 2. Push ke ECR
-3. Trigger App Runner deployment
-4. App Runner deploy new revision (zero downtime)
+3. Update ECS Express service dengan image baru
+4. Rolling deployment otomatis
 
-## Auto Deploy
+## Update Aplikasi (manual)
 
-CloudFormation sudah set `AutoDeploymentsEnabled: true`, artinya
-setiap kali image baru di-push ke ECR, App Runner otomatis deploy.
-GitHub Action juga trigger `start-deployment` sebagai backup.
+```bash
+aws ecs update-express-gateway-service \
+  --service-arn arn:aws:ecs:${AWS_REGION}:${AWS_ACCOUNT_ID}:service/CLUSTER/pqc-demo \
+  --primary-container '{"image": "NEW_IMAGE_URI"}'
+```
 
 ## Cleanup
 
 ```bash
-# Hapus stack (termasuk App Runner service)
-aws cloudformation delete-stack --stack-name pqc-demo --region $AWS_REGION
+# List dan delete ECS Express service
+aws ecs delete-service --cluster CLUSTER_NAME --service pqc-demo --force
 
-# Hapus ECR images jika stack delete gagal
-aws ecr batch-delete-image \
-  --repository-name pqc-demo \
-  --image-ids "$(aws ecr list-images --repository-name pqc-demo --query 'imageIds[*]' --output json)" \
-  --region $AWS_REGION
+# Hapus CloudFormation stack
+aws cloudformation delete-stack --stack-name pqc-demo-infra --region $AWS_REGION
 ```
 
 ## GitHub Secrets
@@ -112,5 +132,7 @@ aws ecr batch-delete-image \
 | `AWS_SECRET_ACCESS_KEY` | IAM user secret key |
 
 IAM user perlu policy:
-- `AWSAppRunnerFullAccess`
+- `AmazonECS_FullAccess`
 - `AmazonEC2ContainerRegistryPowerUser`
+- `CloudWatchLogsFullAccess`
+- `IAMReadOnlyAccess` (untuk get role ARNs)
