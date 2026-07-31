@@ -66,7 +66,8 @@ jobs:
           INFRA_ROLE="arn:aws:iam::${ACCOUNT_ID}:role/pqc-demo-ecs-infrastructure-role"
 
           aws ecs create-express-gateway-service \
-            --primary-container "image=${{ steps.build-image.outputs.image }},port=80,healthCheckPath=/api/health" \
+            --primary-container '{"image": "${{ steps.build-image.outputs.image }}", "containerPort": 80}' \
+            --health-check-path "/api/health" \
             --execution-role-arn $EXECUTION_ROLE \
             --infrastructure-role-arn $INFRA_ROLE \
             --monitor-resources
