@@ -1,23 +1,23 @@
-# CUDA-Q GPU Worker for Grover's Algorithm
-FROM nvidia/cuda:12.4.0-runtime-ubuntu22.04
+# GPU Worker for Grover's Algorithm using CUDA-Q
+# Must be built on Linux x86_64 (use CI or --platform linux/amd64)
+FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install Python and dependencies
+# Install system deps required by cuda-quantum
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3 python3-pip curl \
+    libgomp1 \
+    libstdc++6 \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
-RUN pip3 install --no-cache-dir \
-    fastapi==0.104.1 \
-    uvicorn==0.24.0 \
-    pikepdf==8.11.2 \
-    numpy==1.26.4 \
-    cuda-quantum==0.10.0
+# Install Python dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy worker code
 COPY worker.py .
 
 EXPOSE 8001
 
-CMD ["python3", "-m", "uvicorn", "worker:app", "--host", "0.0.0.0", "--port", "8001"]
+CMD ["python", "-m", "uvicorn", "worker:app", "--host", "0.0.0.0", "--port", "8001"]
