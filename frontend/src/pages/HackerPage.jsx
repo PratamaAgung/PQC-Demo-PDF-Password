@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react'
-import { Skull, Upload, Zap, StopCircle, Eye, Terminal } from 'lucide-react'
+import { Skull, Upload, Zap, StopCircle, Eye, Terminal, Power, Cpu } from 'lucide-react'
 import axios from 'axios'
 
 function HackerPage() {
@@ -12,11 +12,46 @@ function HackerPage() {
   const [error, setError] = useState('')
   const [uploading, setUploading] = useState(false)
   const [showPdf, setShowPdf] = useState(false)
+  const [gpuStatus, setGpuStatus] = useState(null)
+  const [gpuLoading, setGpuLoading] = useState(false)
   const logRef = useRef(null)
   const pollRef = useRef(null)
 
   const addLog = (msg, type = 'info') => {
     setLogs(prev => [...prev, { time: new Date().toLocaleTimeString(), msg, type }])
+  }
+
+  // Check GPU status on mount
+  useEffect(() => {
+    checkGpuStatus()
+  }, [])
+
+  const checkGpuStatus = async () => {
+    try {
+      const res = await axios.get('/api/gpu/status')
+      setGpuStatus(res.data)
+    } catch (err) {
+      setGpuStatus({ status: 'error', message: 'Tidak bisa cek status GPU' })
+    }
+  }
+
+  const toggleGpu = async () => {
+    setGpuLoading(true)
+    try {
+      if (gpuStatus?.status === 'running') {
+        await axios.post('/api/gpu/stop')
+        addLog('GPU worker dimatikan', 'warning')
+      } else {
+        await axios.post('/api/gpu/start')
+        addLog('GPU worker dinyalakan (~2-3 menit)...', 'quantum')
+      }
+      // Poll status until changed
+      setTimeout(checkGpuStatus, 3000)
+    } catch (err) {
+      addLog('Gagal mengontrol GPU worker', 'error')
+    } finally {
+      setGpuLoading(false)
+    }
   }
 
   useEffect(() => {
@@ -150,6 +185,51 @@ function HackerPage() {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Left Panel - Controls */}
         <div className="space-y-4">
+          {/* GPU Control */}
+          <div className="glass-card border-purple-900/30">
+            <h3 className="text-sm font-medium text-purple-300 mb-3 flex items-center gap-2">
+              <Cpu size={16} />
+              GPU Worker (NVIDIA T4)
+            </h3>
+            <div className="flex items-center justify-between">
+              <div>
+                <p className={`text-sm font-medium ${
+                  gpuStatus?.status === 'running' ? 'text-green-400' :
+                  gpuStatus?.status === 'starting' ? 'text-yellow-400' :
+                  'text-gray-500'
+                }`}>
+                  {gpuStatus?.status === 'running' ? '● Aktif' :
+                   gpuStatus?.status === 'starting' ? '◐ Menyalakan...' :
+                   '○ Mati'}
+                </p>
+                <p className="text-xs text-gray-500 mt-0.5">
+                  {gpuStatus?.status === 'running'
+                    ? 'Password hingga 8 digit'
+                    : gpuStatus?.status === 'stopped'
+                    ? 'Nyalakan untuk crack password lebih panjang'
+                    : gpuStatus?.message || ''}
+                </p>
+              </div>
+              <button
+                onClick={toggleGpu}
+                disabled={gpuLoading || gpuStatus?.status === 'starting'}
+                className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-all ${
+                  gpuStatus?.status === 'running'
+                    ? 'bg-red-600/20 text-red-300 hover:bg-red-600/30'
+                    : 'bg-green-600/20 text-green-300 hover:bg-green-600/30'
+                } disabled:opacity-50`}
+              >
+                <Power size={14} />
+                {gpuLoading ? '...' : gpuStatus?.status === 'running' ? 'Matikan' : 'Nyalakan'}
+              </button>
+            </div>
+            {gpuStatus?.status === 'running' && (
+              <p className="text-xs text-yellow-400/70 mt-2">
+                ⚡ ~$0.53/jam — matikan setelah demo selesai
+              </p>
+            )}
+          </div>
+
           {/* Upload Section */}
           <div className="glass-card border-red-900/30">
             <h3 className="text-sm font-medium text-gray-300 mb-3">
@@ -186,6 +266,25 @@ function HackerPage() {
             <h3 className="text-sm font-medium text-gray-300 mb-3">
               2. Jalankan serangan
             </h3>
+            <div className="mb-3">
+              <label className="block text-xs text-gray-400 mb-1">Panjang Password</label>
+              <select
+                value={maxDigits}
+                onChange={(e) => setMaxDigits(Number(e.target.value))}
+                className="input-field text-sm"
+                disabled={cracking}
+              >
+                <option value={2}>2 digit (100 kemungkinan)</option>
+                <option value={3}>3 digit (1,000 kemungkinan)</option>
+                <option value={4}>4 digit (10,000 kemungkinan)</option>
+                {gpuStatus?.status === 'running' && (
+                  <>
+                    <option value={5}>5 digit (100,000) — GPU ⚡</option>
+                    <option value={6}>6 digit (1,000,000) — GPU ⚡</option>
+                  </>
+                )}
+              </select>
+            </div>
             <div className="flex gap-2">
               <button
                 onClick={startCrack}

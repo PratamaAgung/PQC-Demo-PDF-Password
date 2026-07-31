@@ -1,0 +1,55 @@
+# Python
+backend/venv/
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+dist/
+*.egg
+
+# Node
+frontend/node_modules/
+frontend/dist/
+
+# Uploads
+backend/uploads/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+*.o
+*.so
+*.dylib
+
+# Logs
+*.log
+npm-debug.log*
+
+# Docker
+*.tar
+
+# AWS
+.aws/
+
+# Certificates
+*.pem
+*.key
+*.crt
+*.csr
+
+# PDF test files
+*.pdf

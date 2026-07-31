@@ -1,4 +1,4 @@
-name: Deploy to ECS Express Mode
+name: Deploy to ECS Express Mode + GPU Worker
 
 on:
   push:
@@ -8,6 +8,7 @@ on:
 env:
   AWS_REGION: ap-southeast-1
   ECR_REPOSITORY: pqc-demo
+  GPU_ECR_REPOSITORY: pqc-demo-gpu-worker
   ECS_SERVICE_NAME: pqc-demo
 
 permissions:
@@ -15,8 +16,11 @@ permissions:
   contents: read
 
 jobs:
-  deploy:
+  deploy-webapp:
+    name: Deploy Webapp
     runs-on: ubuntu-latest
+    outputs:
+      image: ${{ steps.build-image.outputs.image }}
 
     steps:
       - name: Checkout
@@ -32,7 +36,7 @@ jobs:
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Build, tag, and push image to ECR
+      - name: Build, tag, and push webapp image
         id: build-image
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
@@ -44,41 +48,96 @@ jobs:
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
           echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
 
-      - name: Get ECS Express service ARN
-        id: get-service
+      - name: Deploy webapp to ECS Express
         run: |
           SERVICE_ARN=$(aws ecs list-services \
             --query "serviceArns[?contains(@, '${{ env.ECS_SERVICE_NAME }}')]|[0]" \
-            --output text 2>/dev/null || echo "")
+            --output text 2>/dev/null || echo "None")
 
-          if [ -z "$SERVICE_ARN" ] || [ "$SERVICE_ARN" = "None" ]; then
-            echo "service_exists=false" >> $GITHUB_OUTPUT
+          if [ "$SERVICE_ARN" = "None" ] || [ -z "$SERVICE_ARN" ]; then
+            ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+            EXECUTION_ROLE="arn:aws:iam::${ACCOUNT_ID}:role/pqc-demo-ecs-execution-role"
+            INFRA_ROLE="arn:aws:iam::${ACCOUNT_ID}:role/pqc-demo-ecs-infrastructure-role"
+
+            aws ecs create-express-gateway-service \
+              --primary-container '{"image": "${{ steps.build-image.outputs.image }}", "containerPort": 80}' \
+              --health-check-path "/api/health" \
+              --execution-role-arn $EXECUTION_ROLE \
+              --infrastructure-role-arn $INFRA_ROLE \
+              --monitor-resources
+            echo "🚀 ECS Express service created!"
           else
-            echo "service_exists=true" >> $GITHUB_OUTPUT
-            echo "service_arn=$SERVICE_ARN" >> $GITHUB_OUTPUT
+            aws ecs update-express-gateway-service \
+              --service-arn $SERVICE_ARN \
+              --primary-container '{"image": "${{ steps.build-image.outputs.image }}"}'
+            echo "🚀 Webapp updated!"
           fi
 
-      - name: Create ECS Express service (first time)
-        if: steps.get-service.outputs.service_exists == 'false'
+  deploy-gpu-worker:
+    name: Deploy GPU Worker Image
+    runs-on: ubuntu-latest
+    needs: deploy-webapp
+    if: |
+      contains(github.event.head_commit.message, '[gpu]') ||
+      github.event_name == 'workflow_dispatch'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Create GPU ECR repo if not exists
         run: |
-          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-          EXECUTION_ROLE="arn:aws:iam::${ACCOUNT_ID}:role/pqc-demo-ecs-execution-role"
-          INFRA_ROLE="arn:aws:iam::${ACCOUNT_ID}:role/pqc-demo-ecs-infrastructure-role"
+          aws ecr describe-repositories --repository-names ${{ env.GPU_ECR_REPOSITORY }} > /dev/null 2>&1 || \
+            aws ecr create-repository \
+              --repository-name ${{ env.GPU_ECR_REPOSITORY }} \
+              --image-scanning-configuration scanOnPush=true
 
-          aws ecs create-express-gateway-service \
-            --primary-container '{"image": "${{ steps.build-image.outputs.image }}", "containerPort": 80}' \
-            --health-check-path "/api/health" \
-            --execution-role-arn $EXECUTION_ROLE \
-            --infrastructure-role-arn $INFRA_ROLE \
-            --monitor-resources
-
-          echo "🚀 ECS Express service created!"
-
-      - name: Update ECS Express service
-        if: steps.get-service.outputs.service_exists == 'true'
+      - name: Build, tag, and push GPU worker image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
         run: |
-          aws ecs update-express-gateway-service \
-            --service-arn ${{ steps.get-service.outputs.service_arn }} \
-            --primary-container '{"image": "${{ steps.build-image.outputs.image }}"}'
+          docker build -t $ECR_REGISTRY/$GPU_ECR_REPOSITORY:$IMAGE_TAG -f gpu-worker/Dockerfile gpu-worker/
+          docker tag $ECR_REGISTRY/$GPU_ECR_REPOSITORY:$IMAGE_TAG $ECR_REGISTRY/$GPU_ECR_REPOSITORY:latest
+          docker push $ECR_REGISTRY/$GPU_ECR_REPOSITORY:$IMAGE_TAG
+          docker push $ECR_REGISTRY/$GPU_ECR_REPOSITORY:latest
+          echo "✅ GPU worker image pushed!"
 
-          echo "🚀 ECS Express service updated with new image"
+      - name: Update GPU task definition
+        run: |
+          ECR_REGISTRY=${{ steps.login-ecr.outputs.registry }}
+          # Update task definition with new image
+          aws ecs register-task-definition \
+            --family pqc-demo-gpu-worker \
+            --network-mode host \
+            --requires-compatibilities EC2 \
+            --execution-role-arn "arn:aws:iam::$(aws sts get-caller-identity --query Account --output text):role/pqc-demo-gpu-task-execution-role" \
+            --container-definitions "[{
+              \"name\": \"gpu-worker\",
+              \"image\": \"${ECR_REGISTRY}/${{ env.GPU_ECR_REPOSITORY }}:${{ github.sha }}\",
+              \"cpu\": 4096,
+              \"memory\": 15360,
+              \"essential\": true,
+              \"portMappings\": [{\"containerPort\": 8001, \"hostPort\": 8001, \"protocol\": \"tcp\"}],
+              \"resourceRequirements\": [{\"type\": \"GPU\", \"value\": \"1\"}],
+              \"logConfiguration\": {
+                \"logDriver\": \"awslogs\",
+                \"options\": {
+                  \"awslogs-group\": \"/ecs/pqc-demo-gpu-worker\",
+                  \"awslogs-region\": \"${{ env.AWS_REGION }}\",
+                  \"awslogs-stream-prefix\": \"gpu\",
+                  \"awslogs-create-group\": \"true\"
+                }
+              }
+            }]" > /dev/null
+          echo "✅ GPU task definition updated!"
