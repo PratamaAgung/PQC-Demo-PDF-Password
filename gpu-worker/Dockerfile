@@ -13,7 +13,7 @@ RUN pip3 install --no-cache-dir \
     uvicorn==0.24.0 \
     pikepdf==8.11.2 \
     numpy==1.26.4 \
-    cuda-quantum==0.11.0
+    cuda-quantum==0.10.0
 
 # Copy worker code
 COPY worker.py .
