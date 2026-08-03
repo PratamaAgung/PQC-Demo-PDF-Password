@@ -1,6 +1,6 @@
 # GPU Worker for Grover's Algorithm using CUDA-Q
 # Must be built on Linux x86_64 (use CI or --platform linux/amd64)
-FROM python:3.11-slim
+FROM --platform=linux/amd64 python:3.11-slim
 
 WORKDIR /app
 

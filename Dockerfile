@@ -1,6 +1,6 @@
 # Multi-stage build: Frontend + Backend in one container
 # Stage 1: Build frontend
-FROM node:18-alpine AS frontend-build
+FROM --platform=linux/amd64 node:18-alpine AS frontend-build
 WORKDIR /app/frontend
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
@@ -8,7 +8,7 @@ COPY frontend/ ./
 RUN npm run build
 
 # Stage 2: Runtime
-FROM python:3.11-slim
+FROM --platform=linux/amd64 python:3.11-slim
 WORKDIR /app
 
 # Install system deps
