@@ -4,7 +4,6 @@ Start/stop the GPU worker instance from the UI to save costs.
 """
 
 import os
-import boto3
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
@@ -14,27 +13,30 @@ AWS_REGION = os.environ.get("AWS_REGION", "ap-southeast-1")
 GPU_ASG_NAME = os.environ.get("GPU_ASG_NAME", "pqc-demo-gpu-asg")
 GPU_CLUSTER = os.environ.get("GPU_CLUSTER", "pqc-demo-gpu-cluster")
 GPU_TASK_FAMILY = os.environ.get("GPU_TASK_FAMILY", "pqc-demo-gpu-worker")
-GPU_WORKER_URL = os.environ.get("GPU_WORKER_URL", "")  # Set when worker is running
 
 
-def get_autoscaling_client():
-    return boto3.client("autoscaling", region_name=AWS_REGION)
-
-
-def get_ecs_client():
-    return boto3.client("ecs", region_name=AWS_REGION)
-
-
-def get_ec2_client():
-    return boto3.client("ec2", region_name=AWS_REGION)
+def get_boto3_clients():
+    """Lazy import boto3 and return clients. Returns None if unavailable."""
+    try:
+        import boto3
+        return {
+            "autoscaling": boto3.client("autoscaling", region_name=AWS_REGION),
+            "ecs": boto3.client("ecs", region_name=AWS_REGION),
+            "ec2": boto3.client("ec2", region_name=AWS_REGION),
+        }
+    except Exception:
+        return None
 
 
 @router.get("/status")
 async def gpu_status():
     """Get current GPU worker status."""
+    clients = get_boto3_clients()
+    if not clients:
+        return {"status": "not_configured", "message": "AWS SDK tidak tersedia"}
+
     try:
-        asg_client = get_autoscaling_client()
-        response = asg_client.describe_auto_scaling_groups(
+        response = clients["autoscaling"].describe_auto_scaling_groups(
             AutoScalingGroupNames=[GPU_ASG_NAME]
         )
 
@@ -53,14 +55,11 @@ async def gpu_status():
                 "instances": 0,
             }
 
-        # Check instance state
         running_instances = [i for i in instances if i["LifecycleState"] == "InService"]
 
         if running_instances:
-            # Get public IP
-            ec2 = get_ec2_client()
             instance_id = running_instances[0]["InstanceId"]
-            ec2_response = ec2.describe_instances(InstanceIds=[instance_id])
+            ec2_response = clients["ec2"].describe_instances(InstanceIds=[instance_id])
             public_ip = (
                 ec2_response["Reservations"][0]["Instances"][0]
                 .get("PublicIpAddress", "")
@@ -93,23 +92,24 @@ async def gpu_status():
 @router.post("/start")
 async def start_gpu_worker():
     """Start the GPU worker (set ASG desired=1)."""
+    clients = get_boto3_clients()
+    if not clients:
+        raise HTTPException(status_code=503, detail="AWS SDK tidak tersedia")
+
     try:
-        asg_client = get_autoscaling_client()
-        asg_client.set_desired_capacity(
+        clients["autoscaling"].set_desired_capacity(
             AutoScalingGroupName=GPU_ASG_NAME,
             DesiredCapacity=1,
         )
 
-        # Also start ECS task
-        ecs_client = get_ecs_client()
         try:
-            ecs_client.run_task(
+            clients["ecs"].run_task(
                 cluster=GPU_CLUSTER,
                 taskDefinition=GPU_TASK_FAMILY,
                 count=1,
             )
         except Exception:
-            pass  # Task will be scheduled once instance is ready
+            pass
 
         return {
             "status": "starting",
@@ -124,19 +124,19 @@ async def start_gpu_worker():
 @router.post("/stop")
 async def stop_gpu_worker():
     """Stop the GPU worker (set ASG desired=0)."""
+    clients = get_boto3_clients()
+    if not clients:
+        raise HTTPException(status_code=503, detail="AWS SDK tidak tersedia")
+
     try:
-        # Stop all tasks first
-        ecs_client = get_ecs_client()
         try:
-            tasks = ecs_client.list_tasks(cluster=GPU_CLUSTER)
+            tasks = clients["ecs"].list_tasks(cluster=GPU_CLUSTER)
             for task_arn in tasks.get("taskArns", []):
-                ecs_client.stop_task(cluster=GPU_CLUSTER, task=task_arn)
+                clients["ecs"].stop_task(cluster=GPU_CLUSTER, task=task_arn)
         except Exception:
             pass
 
-        # Scale down ASG
-        asg_client = get_autoscaling_client()
-        asg_client.set_desired_capacity(
+        clients["autoscaling"].set_desired_capacity(
             AutoScalingGroupName=GPU_ASG_NAME,
             DesiredCapacity=0,
         )
