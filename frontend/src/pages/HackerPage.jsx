@@ -11,7 +11,7 @@ function HackerPage() {
   const [logs, setLogs] = useState([])
   const [error, setError] = useState('')
   const [uploading, setUploading] = useState(false)
-  const [showPdf, setShowPdf] = useState(false)
+  const [showPdf, setShowPdf] = useState(null)
   const logRef = useRef(null)
   const pollRef = useRef(null)
 
@@ -37,7 +37,7 @@ function HackerPage() {
     setError('')
     setLogs([])
     setProgress(null)
-    setShowPdf(false)
+    setShowPdf(null)
 
     const formData = new FormData()
     formData.append('file', file)
@@ -61,7 +61,7 @@ function HackerPage() {
     setCracking(true)
     setProgress(null)
     setError('')
-    setShowPdf(false)
+    setShowPdf(null)
 
     const keyspace = Math.pow(10, maxDigits)
     const groverIters = Math.ceil(Math.sqrt(keyspace) * Math.PI / 4)
@@ -127,13 +127,21 @@ function HackerPage() {
     }
   }
 
-  const viewUnlocked = () => {
-    setShowPdf(true)
+  const viewUnlocked = async () => {
+    if (!fileId || !progress?.password_found) return
+    try {
+      const response = await axios.get(
+        `/api/pdf/view/${fileId}?password=${encodeURIComponent(progress.password_found)}`,
+        { responseType: 'blob' }
+      )
+      const blob = new Blob([response.data], { type: 'application/pdf' })
+      setShowPdf(URL.createObjectURL(blob))
+    } catch (err) {
+      addLog('Gagal membuka PDF: ' + (err.response?.status || err.message), 'error')
+    }
   }
 
-  const pdfPreviewUrl = (fileId && progress?.password_found)
-    ? `/api/pdf/view/${fileId}?password=${encodeURIComponent(progress.password_found)}`
-    : null
+  const pdfPreviewUrl = showPdf
 
   return (
     <div className="max-w-5xl mx-auto px-4 py-12">
@@ -159,7 +167,7 @@ function HackerPage() {
               <input
                 type="file"
                 accept=".pdf"
-                onChange={(e) => { setFile(e.target.files[0]); setFileId(null); setProgress(null); setShowPdf(false); }}
+                onChange={(e) => { setFile(e.target.files[0]); setFileId(null); setProgress(null); setShowPdf(null); }}
                 className="hidden"
                 id="hacker-upload"
               />
@@ -260,29 +268,17 @@ function HackerPage() {
               {/* Production-class comparison */}
               <div className="mt-4 bg-red-900/10 border border-red-800/30 rounded-lg p-4">
                 <p className="text-xs text-red-300 font-medium mb-2">
-                  ⚠️ Bagaimana jika ini algoritma production (bukan demo)?
+                  ⚠️ To crack RC4-128 encryption in production environment:
                 </p>
-                <div className="grid grid-cols-3 gap-2 text-center">
-                  <div>
-                    <p className="text-[10px] text-gray-500">AES-128</p>
-                    <p className="text-xs font-bold text-yellow-300">2<sup>128</sup> → 2<sup>64</sup></p>
-                    <p className="text-[10px] text-red-400">Tidak aman</p>
+                <div className="grid grid-cols-2 gap-3 mt-3">
+                  <div className="bg-purple-900/20 rounded-lg p-3 text-center">
+                    <p className="text-sm font-bold text-purple-300">Hours — Weeks</p>
+                    <p className="text-[11px] text-gray-400 mt-1">Quantum computer</p>
                   </div>
-                  <div>
-                    <p className="text-[10px] text-gray-500">AES-256</p>
-                    <p className="text-xs font-bold text-green-300">2<sup>256</sup> → 2<sup>128</sup></p>
-                    <p className="text-[10px] text-green-400">Masih aman</p>
+                  <div className="bg-yellow-900/20 rounded-lg p-3 text-center">
+                    <p className="text-sm font-bold text-yellow-300">Millions — Billions years</p>
+                    <p className="text-[11px] text-gray-400 mt-1">Classical computer</p>
                   </div>
-                  <div>
-                    <p className="text-[10px] text-gray-500">RSA-2048</p>
-                    <p className="text-xs font-bold text-red-400">Rusak total</p>
-                    <p className="text-[10px] text-red-400">Shor's Algo</p>
-                  </div>
-                </div>
-                <div className="mt-3 text-[11px] text-gray-400 space-y-1">
-                  <p>• <span className="text-purple-300">Grover</span>: memotong kekuatan enkripsi simetris jadi <strong className="text-white">setengah</strong></p>
-                  <p>• <span className="text-red-300">Shor</span>: menghancurkan RSA & ECC secara <strong className="text-white">total</strong> (polynomial time)</p>
-                  <p>• Solusi: migrasi ke <span className="text-green-300">Post-Quantum Cryptography</span> sekarang</p>
                 </div>
               </div>
 
@@ -337,7 +333,7 @@ function HackerPage() {
       </div>
 
       {/* PDF Preview */}
-      {showPdf && pdfPreviewUrl && (
+      {pdfPreviewUrl && (
         <div className="mt-6 glass-card border-green-900/30">
           <h3 className="text-lg font-bold text-green-300 mb-4 flex items-center gap-2">
             <Eye size={20} />
