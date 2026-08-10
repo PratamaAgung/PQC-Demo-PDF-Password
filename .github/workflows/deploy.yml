@@ -90,7 +90,6 @@ jobs:
               --memory "1024" \
               --health-check-path "/api/health" \
               --scaling-target '{"minTaskCount":1,"maxTaskCount":1}' \
-              --runtime-platform '{"cpuArchitecture":"X86_64","operatingSystemFamily":"LINUX"}' \
               --monitor-resources \
               --region ${{ env.AWS_REGION }})
             SERVICE_ARN=$(echo $RESULT | jq -r '.service.serviceArn')
@@ -100,7 +99,6 @@ jobs:
             aws ecs update-express-gateway-service \
               --service-arn $SERVICE_ARN \
               --primary-container "{\"image\":\"$IMAGE\",\"containerPort\":80}" \
-              --runtime-platform '{"cpuArchitecture":"X86_64","operatingSystemFamily":"LINUX"}' \
               --monitor-resources \
               --region ${{ env.AWS_REGION }}
           fi
