@@ -166,6 +166,7 @@ if [ "$SERVICE_ARN" = "None" ] || [ -z "$SERVICE_ARN" ]; then
   aws ecs create-express-gateway-service \
     --primary-container "{\"image\": \"${FULL_IMAGE}\", \"containerPort\": 80}" \
     --health-check-path "/api/health" \
+    --health-check-grace-period 60 \
     --execution-role-arn $EXECUTION_ROLE_ARN \
     --infrastructure-role-arn $INFRA_ROLE_ARN \
     --region $AWS_REGION \
@@ -175,7 +176,7 @@ else
   echo "   Updating existing service: $SERVICE_ARN"
   aws ecs update-express-gateway-service \
     --service-arn $SERVICE_ARN \
-    --primary-container "{\"image\": \"${FULL_IMAGE}\"}" \
+    --primary-container "{\"image\": \"${FULL_IMAGE}\", \"containerPort\": 80}" \
     --region $AWS_REGION
   echo "   ✅ Service updated!"
 fi

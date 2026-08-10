@@ -42,7 +42,7 @@ jobs:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
           IMAGE_TAG: ${{ github.sha }}
         run: |
-          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+          docker build --platform linux/amd64 -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
           docker tag $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG $ECR_REGISTRY/$ECR_REPOSITORY:latest
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
@@ -62,6 +62,7 @@ jobs:
             aws ecs create-express-gateway-service \
               --primary-container '{"image": "${{ steps.build-image.outputs.image }}", "containerPort": 80}' \
               --health-check-path "/api/health" \
+              --health-check-grace-period 60 \
               --execution-role-arn $EXECUTION_ROLE \
               --infrastructure-role-arn $INFRA_ROLE \
               --monitor-resources
@@ -69,7 +70,7 @@ jobs:
           else
             aws ecs update-express-gateway-service \
               --service-arn $SERVICE_ARN \
-              --primary-container '{"image": "${{ steps.build-image.outputs.image }}"}'
+              --primary-container '{"image": "${{ steps.build-image.outputs.image }}", "containerPort": 80}'
             echo "🚀 Webapp updated!"
           fi
 
