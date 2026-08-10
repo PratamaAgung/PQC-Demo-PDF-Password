@@ -34,13 +34,9 @@ COPY nginx.conf /etc/nginx/conf.d/default.conf
 # Create uploads directory
 RUN mkdir -p /app/backend/uploads
 
-# Startup script
-COPY entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
-
 EXPOSE 80
 
 HEALTHCHECK --interval=10s --timeout=3s --start-period=15s --retries=3 \
   CMD curl -f http://localhost/api/health || exit 1
 
-CMD ["/entrypoint.sh"]
+CMD ["sh", "-c", "cd /app/backend && python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 & sleep 2 && nginx -g 'daemon off;'"]

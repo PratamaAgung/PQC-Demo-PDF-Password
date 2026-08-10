@@ -18,7 +18,7 @@ permissions:
 jobs:
   deploy-webapp:
     name: Deploy Webapp
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       image: ${{ steps.build-image.outputs.image }}
 
