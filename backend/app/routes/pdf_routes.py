@@ -64,6 +64,7 @@ async def lock_pdf(file: UploadFile = File(...), password: str = Form(...)):
     return {
         "file_id": file_id,
         "filename": file.filename,
+        "download_filename": file.filename.rsplit('.', 1)[0] + "_with_password.pdf",
         "password_length": len(password),
         "encryption": "AES-128 (password lemah)",
         "message": f"PDF berhasil di-lock dengan password {len(password)} digit",
@@ -71,13 +72,14 @@ async def lock_pdf(file: UploadFile = File(...), password: str = Form(...)):
 
 
 @router.get("/download/{file_id}")
-async def download_locked_pdf(file_id: str):
+async def download_locked_pdf(file_id: str, original_name: str = "document"):
     """Download the locked PDF file."""
     file_path = os.path.join(UPLOAD_DIR, f"{file_id}_locked.pdf")
     if not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail="File tidak ditemukan")
+    download_name = original_name.rsplit('.', 1)[0] + "_with_password.pdf" if original_name != "document" else f"locked_{file_id}.pdf"
     return FileResponse(
-        file_path, media_type="application/pdf", filename=f"locked_{file_id}.pdf"
+        file_path, media_type="application/pdf", filename=download_name
     )
 
 

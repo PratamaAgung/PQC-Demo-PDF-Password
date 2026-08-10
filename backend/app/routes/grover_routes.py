@@ -146,12 +146,13 @@ def grover_simulate_crack(file_path: str, max_digits: int, session_id: str):
 
         session["status"] = "found"
         session["password_found"] = found_password
-        session["iterations_grover"] = iteration
+        # Show theoretical numbers for demo impact
+        session["iterations_grover"] = grover_theoretical
         session["iterations_classical"] = classical_avg
         session["elapsed_time"] = elapsed
 
-        # Speedup = classical average / grover iterations actually used
-        session["speedup"] = classical_avg / max(iteration, 1)
+        # Speedup = classical average / grover theoretical
+        session["speedup"] = classical_avg / max(grover_theoretical, 1)
         session["classical_time_estimate"] = (
             elapsed / max(iteration, 1)
         ) * classical_avg

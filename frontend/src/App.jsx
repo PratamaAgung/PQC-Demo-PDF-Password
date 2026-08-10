@@ -32,7 +32,7 @@ function App() {
                 }
               >
                 <Lock size={16} />
-                Kunci
+                Protect PDF Using Password
               </NavLink>
               <NavLink
                 to="/verify"
@@ -43,7 +43,7 @@ function App() {
                 }
               >
                 <Shield size={16} />
-                Verifikasi
+                Verify Password
               </NavLink>
               <NavLink
                 to="/hacker"
@@ -54,7 +54,7 @@ function App() {
                 }
               >
                 <Skull size={16} />
-                Serangan
+                Crack Password
               </NavLink>
               <NavLink
                 to="/learn"

@@ -334,7 +334,7 @@ function HackerPage() {
                   <p className="text-xs text-gray-500 mt-1">Lebih Cepat</p>
                 </div>
                 <div className="bg-black/30 rounded-lg p-4 text-center">
-                  <p className="text-xl font-bold text-purple-300">{progress.iterations_grover}</p>
+                  <p className="text-xl font-bold text-purple-300">{progress.iterations_grover?.toLocaleString()}</p>
                   <p className="text-xs text-gray-500 mt-1">Percobaan Quantum</p>
                 </div>
                 <div className="bg-black/30 rounded-lg p-4 text-center">
@@ -342,6 +342,36 @@ function HackerPage() {
                   <p className="text-xs text-gray-500 mt-1">Percobaan Klasik</p>
                 </div>
               </div>
+
+              {/* Production-class comparison */}
+              <div className="mt-4 bg-red-900/10 border border-red-800/30 rounded-lg p-4">
+                <p className="text-xs text-red-300 font-medium mb-2">
+                  ⚠️ Bagaimana jika ini algoritma production (bukan demo)?
+                </p>
+                <div className="grid grid-cols-3 gap-2 text-center">
+                  <div>
+                    <p className="text-[10px] text-gray-500">AES-128</p>
+                    <p className="text-xs font-bold text-yellow-300">2<sup>128</sup> → 2<sup>64</sup></p>
+                    <p className="text-[10px] text-red-400">Tidak aman</p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] text-gray-500">AES-256</p>
+                    <p className="text-xs font-bold text-green-300">2<sup>256</sup> → 2<sup>128</sup></p>
+                    <p className="text-[10px] text-green-400">Masih aman</p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] text-gray-500">RSA-2048</p>
+                    <p className="text-xs font-bold text-red-400">Rusak total</p>
+                    <p className="text-[10px] text-red-400">Shor's Algo</p>
+                  </div>
+                </div>
+                <div className="mt-3 text-[11px] text-gray-400 space-y-1">
+                  <p>• <span className="text-purple-300">Grover</span>: memotong kekuatan enkripsi simetris jadi <strong className="text-white">setengah</strong></p>
+                  <p>• <span className="text-red-300">Shor</span>: menghancurkan RSA & ECC secara <strong className="text-white">total</strong> (polynomial time)</p>
+                  <p>• Solusi: migrasi ke <span className="text-green-300">Post-Quantum Cryptography</span> sekarang</p>
+                </div>
+              </div>
+
               <button
                 onClick={viewUnlocked}
                 className="btn-success w-full mt-4 flex items-center justify-center gap-2"

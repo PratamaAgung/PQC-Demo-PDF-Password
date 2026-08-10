@@ -36,7 +36,8 @@ function LockPage() {
 
   const handleDownload = () => {
     if (result?.file_id) {
-      window.open(`/api/pdf/download/${result.file_id}`, '_blank')
+      const originalName = encodeURIComponent(file?.name || 'document')
+      window.open(`/api/pdf/download/${result.file_id}?original_name=${originalName}`, '_blank')
     }
   }
 
