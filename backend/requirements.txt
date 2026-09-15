@@ -5,3 +5,9 @@ pikepdf==8.11.2
 pydantic==2.5.2
 numpy==1.26.4
 boto3==1.34.0
+
+# NOTE: CUDA-Q is intentionally NOT here.
+# The always-on CPU webapp image (root Dockerfile) stays slim and does not
+# install cudaq. The GPU auto-detection in the app degrades gracefully to CPU
+# simulation when cudaq is absent. The on-demand GPU image (Dockerfile.gpu)
+# installs cudaq via backend/requirements-gpu.txt.

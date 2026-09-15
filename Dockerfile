@@ -7,8 +7,13 @@ RUN npm ci
 COPY frontend/ ./
 RUN npm run build
 
-# Stage 2: Runtime
-FROM python:3.11-slim
+# Stage 2: Runtime (SLIM CPU webapp image)
+# This is the always-on webapp image deployed to ECS Express Mode. It does NOT
+# install CUDA-Q, so it stays small. The app's GPU auto-detection degrades
+# gracefully to CPU simulation when cudaq is absent.
+# For the GPU-accelerated demo image (with cudaq) see Dockerfile.gpu.
+# Pinned to linux/amd64 to match the ECS Express (Fargate x86_64) runtime.
+FROM --platform=linux/amd64 python:3.11-slim
 WORKDIR /app
 
 # Install system deps
@@ -17,7 +22,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Python dependencies
+# Install Python dependencies (slim: no cudaq)
 COPY backend/requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 

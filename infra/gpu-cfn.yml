@@ -1,0 +1,206 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  PQC Demo - On-demand GPU runner (g4dn.xlarge). Scale-to-zero by default:
+  the Auto Scaling Group and ECS service both start at desired=0 so there is
+  NO cost while idle. Bring it up only for a live demo, then take it back to 0.
+  Runs the dedicated GPU image (pqc-demo-gpu, built from Dockerfile.gpu with
+  cudaq); the app auto-detects the GPU and uses CUDA-Q's 'nvidia' target.
+
+Parameters:
+  ImageUri:
+    Type: String
+    Description: ECR image URI for the pqc-demo-gpu image (GPU image, includes cudaq).
+
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC to launch the GPU instance in (use the default VPC if unsure).
+
+  SubnetId:
+    Type: AWS::EC2::Subnet::Id
+    Description: Public subnet for the GPU instance (must map a public IP).
+
+  InstanceType:
+    Type: String
+    Default: g4dn.xlarge
+    Description: GPU instance type (g4dn.xlarge = 1x NVIDIA T4 16GB, cheapest GPU).
+
+  AllowedCidr:
+    Type: String
+    Default: 0.0.0.0/0
+    Description: CIDR allowed to reach the GPU runner on port 80 (lock this down for a real demo).
+
+Resources:
+  # ============ ECS Cluster ============
+  GpuCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: pqc-demo-gpu-cluster
+
+  # ============ CloudWatch Logs ============
+  GpuLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /ecs/pqc-demo-gpu
+      RetentionInDays: 7
+
+  # ============ Security Group ============
+  GpuSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: PQC Demo GPU runner - allow HTTP for the demo
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: !Ref AllowedCidr
+      Tags:
+        - Key: Name
+          Value: pqc-demo-gpu-sg
+
+  # ============ IAM ============
+  # EC2 instance role: lets the ECS agent register the GPU instance and pull
+  # images / push logs. SSM access is handy for debugging via Session Manager.
+  GpuInstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: pqc-demo-gpu-instance-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceforEC2Role
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+
+  GpuInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: pqc-demo-gpu-instance-profile
+      Roles:
+        - !Ref GpuInstanceRole
+
+  # Task execution role: pulls the image from ECR and writes container logs.
+  GpuTaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: pqc-demo-gpu-task-execution-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+
+  # ============ Launch Template (ECS GPU-optimized AMI) ============
+  GpuLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: pqc-demo-gpu-lt
+      LaunchTemplateData:
+        # ECS GPU-optimized AMI (Amazon Linux 2) - ships NVIDIA driver + the
+        # NVIDIA container runtime so ECS can expose the GPU to the task.
+        ImageId: !Sub 'resolve:ssm:/aws/service/ecs/optimized-ami/amazon-linux-2/gpu/recommended/image_id'
+        InstanceType: !Ref InstanceType
+        # On-demand (no InstanceMarketOptions => on-demand purchasing).
+        IamInstanceProfile:
+          Arn: !GetAtt GpuInstanceProfile.Arn
+        SecurityGroupIds:
+          - !Ref GpuSecurityGroup
+        UserData:
+          Fn::Base64: !Sub |
+            #!/bin/bash
+            echo "ECS_CLUSTER=${GpuCluster}" >> /etc/ecs/ecs.config
+            echo "ECS_ENABLE_GPU_SUPPORT=true" >> /etc/ecs/ecs.config
+
+  # ============ Auto Scaling Group (scale-to-zero) ============
+  GpuAutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      AutoScalingGroupName: pqc-demo-gpu-asg
+      LaunchTemplate:
+        LaunchTemplateId: !Ref GpuLaunchTemplate
+        Version: !GetAtt GpuLaunchTemplate.LatestVersionNumber
+      MinSize: '0'
+      MaxSize: '1'
+      DesiredCapacity: '0'   # idle by default => no cost
+      VPCZoneIdentifier:
+        - !Ref SubnetId
+      Tags:
+        - Key: Name
+          Value: pqc-demo-gpu-runner
+          PropagateAtLaunch: true
+
+  # ============ Task Definition (requests 1 GPU) ============
+  GpuTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: pqc-demo-gpu
+      NetworkMode: bridge
+      RequiresCompatibilities:
+        - EC2
+      ExecutionRoleArn: !GetAtt GpuTaskExecutionRole.Arn
+      ContainerDefinitions:
+        - Name: pqc-demo-gpu
+          Image: !Ref ImageUri
+          Cpu: 3072
+          Memory: 14336
+          Essential: true
+          PortMappings:
+            - ContainerPort: 80
+              HostPort: 80
+              Protocol: tcp
+          ResourceRequirements:
+            - Type: GPU
+              Value: '1'
+          Environment:
+            # Belt-and-suspenders: the app auto-detects the GPU, but this makes
+            # the intent explicit on the GPU task.
+            - Name: PQC_FORCE_GPU
+              Value: '1'
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: /ecs/pqc-demo-gpu
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: gpu
+
+  # ============ ECS Service (also scale-to-zero) ============
+  GpuService:
+    Type: AWS::ECS::Service
+    # Depend on the ASG so the cluster has (potential) capacity registered.
+    DependsOn: GpuAutoScalingGroup
+    Properties:
+      ServiceName: pqc-demo-gpu
+      Cluster: !Ref GpuCluster
+      TaskDefinition: !Ref GpuTaskDefinition
+      DesiredCount: 0        # idle by default => no task running
+      LaunchType: EC2
+      DeploymentConfiguration:
+        MinimumHealthyPercent: 0
+        MaximumPercent: 100
+
+Outputs:
+  ClusterName:
+    Description: ECS cluster name
+    Value: !Ref GpuCluster
+  ServiceName:
+    Description: ECS service name (scale DesiredCount to 1 for a demo)
+    Value: !GetAtt GpuService.Name
+  AutoScalingGroupName:
+    Description: ASG name (scale to 1 to launch the GPU instance)
+    Value: !Ref GpuAutoScalingGroup
+  SecurityGroupId:
+    Value: !Ref GpuSecurityGroup
+  HowToStart:
+    Description: Command to bring the GPU runner up for a demo
+    Value: !Sub 'aws autoscaling set-desired-capacity --auto-scaling-group-name ${GpuAutoScalingGroup} --desired-capacity 1 --region ${AWS::Region} && aws ecs update-service --cluster ${GpuCluster} --service pqc-demo-gpu --desired-count 1 --region ${AWS::Region}'
+  HowToStop:
+    Description: Command to take the GPU runner back to zero cost
+    Value: !Sub 'aws ecs update-service --cluster ${GpuCluster} --service pqc-demo-gpu --desired-count 0 --region ${AWS::Region} && aws autoscaling set-desired-capacity --auto-scaling-group-name ${GpuAutoScalingGroup} --desired-capacity 0 --region ${AWS::Region}'

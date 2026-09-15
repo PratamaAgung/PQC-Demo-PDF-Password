@@ -5,7 +5,9 @@ import axios from 'axios'
 function HackerPage() {
   const [file, setFile] = useState(null)
   const [fileId, setFileId] = useState(null)
-  const [maxDigits, setMaxDigits] = useState(4)
+  const [maxDigits, setMaxDigits] = useState(3)
+  const [charset, setCharset] = useState('alphanumeric')
+  const [backend, setBackend] = useState(null)
   const [cracking, setCracking] = useState(false)
   const [progress, setProgress] = useState(null)
   const [logs, setLogs] = useState([])
@@ -30,6 +32,19 @@ function HackerPage() {
       if (pollRef.current) clearInterval(pollRef.current)
     }
   }, [])
+
+  // Detect which compute backend the server auto-selected (GPU vs CPU).
+  useEffect(() => {
+    axios.get('/api/grover/backend')
+      .then(res => setBackend(res.data))
+      .catch(() => setBackend(null))
+  }, [])
+
+  const CHARSET_SIZE = { numeric: 10, lowercase: 36, alphanumeric: 62 }
+  const base = CHARSET_SIZE[charset] || 10
+  const keyspace = Math.pow(base, maxDigits)
+  const numQubits = Math.max(1, Math.ceil(Math.log2(keyspace)))
+  const groverIters = Math.ceil(Math.sqrt(keyspace) * Math.PI / 4)
 
   const handleUpload = async () => {
     if (!file) return
@@ -63,23 +78,30 @@ function HackerPage() {
     setError('')
     setShowPdf(null)
 
-    const keyspace = Math.pow(10, maxDigits)
-    const groverIters = Math.ceil(Math.sqrt(keyspace) * Math.PI / 4)
+    const charsetLabel = { numeric: '0-9', lowercase: '0-9 a-z', alphanumeric: '0-9 a-z A-Z' }[charset]
 
     addLog('', 'divider')
     addLog('MEMULAI SERANGAN QUANTUM (Grover\'s Algorithm)', 'quantum')
-    addLog(`Mencari password dari ${keyspace.toLocaleString()} kemungkinan...`, 'info')
-    addLog(`Komputer klasik butuh rata-rata ~${(keyspace/2).toLocaleString()} percobaan`, 'warning')
-    addLog(`Quantum computer butuh ~${groverIters} percobaan`, 'quantum')
+    addLog(`Charset: ${charset} (${charsetLabel}), panjang ${maxDigits} karakter`, 'info')
+    addLog(`Key space: ${keyspace.toLocaleString()} kemungkinan (~${numQubits} qubit)`, 'info')
+    addLog(`Komputer klasik butuh rata-rata ~${Math.round(keyspace/2).toLocaleString()} percobaan`, 'warning')
+    addLog(`Quantum computer butuh ~${groverIters} iterasi Grover`, 'quantum')
+    addLog(backend?.gpu_available
+      ? `Compute: GPU aktif (${backend.compute_backend})`
+      : `Compute: CPU (${backend?.compute_backend || 'cpu-simulation'})`,
+      backend?.gpu_available ? 'quantum' : 'warning')
     addLog('', 'divider')
 
     try {
       const response = await axios.post('/api/grover/start-crack', {
         file_id: fileId,
         max_digits: maxDigits,
+        charset: charset,
       })
 
       addLog('Quantum search berjalan...', 'quantum')
+
+      let amplifyLogged = false
 
       // Start polling for progress
       pollRef.current = setInterval(async () => {
@@ -87,13 +109,24 @@ function HackerPage() {
           const prog = await axios.get(`/api/grover/progress/${response.data.session_id}`)
           setProgress(prog.data)
 
+          if (prog.data.status === 'amplifying' && !amplifyLogged) {
+            amplifyLogged = true
+            addLog(`Menjalankan Grover circuit di GPU (${prog.data.num_qubits} qubit)...`, 'quantum')
+          }
+
           if (prog.data.status === 'found') {
             clearInterval(pollRef.current)
             setCracking(false)
             addLog('', 'divider')
             addLog(`PASSWORD DITEMUKAN: ${prog.data.password_found}`, 'success')
-            addLog(`Quantum: ${prog.data.iterations_grover} percobaan`, 'quantum')
+            addLog(`Quantum: ${prog.data.iterations_grover} iterasi Grover`, 'quantum')
             addLog(`Klasik (rata-rata): ~${prog.data.iterations_classical.toLocaleString()} percobaan`, 'warning')
+            if (prog.data.gpu_used && prog.data.last_gpu_elapsed != null) {
+              addLog(`GPU circuit: ${prog.data.circuit_iterations} iterasi dalam ${prog.data.last_gpu_elapsed.toFixed(3)}s`, 'quantum')
+              if (prog.data.measured_probability != null) {
+                addLog(`Probabilitas hasil terukur: ${(prog.data.measured_probability * 100).toFixed(1)}%`, 'quantum')
+              }
+            }
             if (prog.data.speedup && prog.data.speedup > 0) {
               addLog(`${Math.round(prog.data.speedup)}x lebih cepat dengan quantum!`, 'quantum')
             }
@@ -195,6 +228,19 @@ function HackerPage() {
               2. Jalankan serangan
             </h3>
             <div className="mb-3">
+              <label className="block text-xs text-gray-400 mb-1">Jenis Karakter</label>
+              <select
+                value={charset}
+                onChange={(e) => setCharset(e.target.value)}
+                className="input-field text-sm"
+                disabled={cracking}
+              >
+                <option value="numeric">Numerik (0-9, base 10)</option>
+                <option value="lowercase">Huruf kecil + angka (base 36)</option>
+                <option value="alphanumeric">Alphanumeric (0-9 a-z A-Z, base 62)</option>
+              </select>
+            </div>
+            <div className="mb-3">
               <label className="block text-xs text-gray-400 mb-1">Panjang Password</label>
               <select
                 value={maxDigits}
@@ -202,11 +248,32 @@ function HackerPage() {
                 className="input-field text-sm"
                 disabled={cracking}
               >
-                <option value={2}>2 digit (100 kemungkinan)</option>
-                <option value={3}>3 digit (1,000 kemungkinan)</option>
-                <option value={4}>4 digit (10,000 kemungkinan)</option>
+                <option value={1}>1 karakter</option>
+                <option value={2}>2 karakter</option>
+                <option value={3}>3 karakter</option>
               </select>
             </div>
+            <div className="mb-3 grid grid-cols-2 gap-2 text-center">
+              <div className="bg-black/30 rounded-lg p-2">
+                <p className="text-sm font-bold text-purple-300">{keyspace.toLocaleString()}</p>
+                <p className="text-[10px] text-gray-500">Key space</p>
+              </div>
+              <div className="bg-black/30 rounded-lg p-2">
+                <p className="text-sm font-bold text-purple-300">~{numQubits} qubit</p>
+                <p className="text-[10px] text-gray-500">Grover circuit</p>
+              </div>
+            </div>
+            {backend && (
+              <div className={`mb-3 text-center text-xs rounded-lg p-2 ${
+                backend.gpu_available
+                  ? 'bg-purple-900/20 text-purple-300 border border-purple-800/40'
+                  : 'bg-yellow-900/10 text-yellow-300 border border-yellow-800/30'
+              }`}>
+                {backend.gpu_available
+                  ? `⚡ GPU aktif — ${backend.compute_backend}`
+                  : `🧮 CPU — ${backend.compute_backend}`}
+              </div>
+            )}
             <div className="flex gap-2">
               <button
                 onClick={startCrack}
@@ -257,11 +324,23 @@ function HackerPage() {
                 </div>
                 <div className="bg-black/30 rounded-lg p-4 text-center">
                   <p className="text-xl font-bold text-purple-300">{progress.iterations_grover?.toLocaleString()}</p>
-                  <p className="text-xs text-gray-500 mt-1">Percobaan Quantum</p>
+                  <p className="text-xs text-gray-500 mt-1">Iterasi Grover</p>
                 </div>
                 <div className="bg-black/30 rounded-lg p-4 text-center">
                   <p className="text-xl font-bold text-yellow-300">{progress.iterations_classical?.toLocaleString()}</p>
                   <p className="text-xs text-gray-500 mt-1">Percobaan Klasik</p>
+                </div>
+                <div className="bg-black/30 rounded-lg p-4 text-center">
+                  <p className="text-xl font-bold text-blue-300">{progress.num_qubits ?? numQubits}</p>
+                  <p className="text-xs text-gray-500 mt-1">Qubit disimulasikan</p>
+                </div>
+                <div className="bg-black/30 rounded-lg p-4 text-center">
+                  <p className="text-xl font-bold text-blue-300">
+                    {progress.gpu_used ? 'GPU' : 'CPU'}
+                  </p>
+                  <p className="text-xs text-gray-500 mt-1">
+                    {progress.compute_backend || (progress.gpu_used ? 'cudaq-nvidia' : 'cpu')}
+                  </p>
                 </div>
               </div>
 
