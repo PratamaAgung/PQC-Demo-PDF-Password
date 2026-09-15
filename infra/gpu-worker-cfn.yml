@@ -1,0 +1,180 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: PQC Demo - GPU Worker (ECS EC2 with NVIDIA GPU, on-demand)
+
+Parameters:
+  GpuImageUri:
+    Type: String
+    Description: ECR image URI for GPU worker
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC ID (use same VPC as ECS Express or default VPC)
+  SubnetId:
+    Type: AWS::EC2::Subnet::Id
+    Description: Public subnet for GPU instance
+
+Resources:
+  # ============ ECR for GPU worker ============
+  GPUECRRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: pqc-demo-gpu-worker
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {
+            "rules": [{
+              "rulePriority": 1,
+              "description": "Keep last 3 images",
+              "selection": {
+                "tagStatus": "any",
+                "countType": "imageCountMoreThan",
+                "countNumber": 3
+              },
+              "action": {"type": "expire"}
+            }]
+          }
+
+  # ============ ECS Cluster for GPU ============
+  GPUCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: pqc-demo-gpu-cluster
+
+  # ============ Security Group ============
+  GPUSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: GPU Worker Security Group
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 8001
+          ToPort: 8001
+          CidrIp: '0.0.0.0/0'
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: '0.0.0.0/0'
+
+  # ============ IAM ============
+  GPUInstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: pqc-demo-gpu-instance-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceforEC2Role
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+
+  GPUInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref GPUInstanceRole
+
+  GPUTaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: pqc-demo-gpu-task-execution-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+
+  # ============ Launch Template (g4dn.xlarge - cheapest GPU) ============
+  GPULaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: pqc-demo-gpu-lt
+      LaunchTemplateData:
+        ImageId: !Sub 'resolve:ssm:/aws/service/ecs/optimized-ami/amazon-linux-2/gpu/recommended/image_id'
+        InstanceType: g4dn.xlarge
+        IamInstanceProfile:
+          Arn: !GetAtt GPUInstanceProfile.Arn
+        SecurityGroupIds:
+          - !Ref GPUSecurityGroup
+        UserData:
+          Fn::Base64: !Sub |
+            #!/bin/bash
+            echo "ECS_CLUSTER=${GPUCluster}" >> /etc/ecs/ecs.config
+            echo "ECS_ENABLE_GPU_SUPPORT=true" >> /etc/ecs/ecs.config
+
+  # ============ Auto Scaling Group (min=0, controlled via API) ============
+  GPUAutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      AutoScalingGroupName: pqc-demo-gpu-asg
+      LaunchTemplate:
+        LaunchTemplateId: !Ref GPULaunchTemplate
+        Version: !GetAtt GPULaunchTemplate.LatestVersionNumber
+      MinSize: '0'
+      MaxSize: '1'
+      DesiredCapacity: '0'
+      VPCZoneIdentifier:
+        - !Ref SubnetId
+      Tags:
+        - Key: Name
+          Value: pqc-demo-gpu-worker
+          PropagateAtLaunch: true
+
+  # ============ ECS Capacity Provider ============
+  GPUCapacityProvider:
+    Type: AWS::ECS::CapacityProvider
+    Properties:
+      Name: pqc-demo-gpu-cp
+      AutoScalingGroupProvider:
+        AutoScalingGroupArn: !Ref GPUAutoScalingGroup
+        ManagedScaling:
+          Status: DISABLED
+        ManagedTerminationProtection: DISABLED
+
+  # ============ Task Definition ============
+  GPUTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: pqc-demo-gpu-worker
+      NetworkMode: host
+      RequiresCompatibilities:
+        - EC2
+      ExecutionRoleArn: !GetAtt GPUTaskExecutionRole.Arn
+      ContainerDefinitions:
+        - Name: gpu-worker
+          Image: !Ref GpuImageUri
+          Cpu: 4096
+          Memory: 15360
+          Essential: true
+          PortMappings:
+            - ContainerPort: 8001
+              HostPort: 8001
+              Protocol: tcp
+          ResourceRequirements:
+            - Type: GPU
+              Value: '1'
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: /ecs/pqc-demo-gpu-worker
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: gpu
+              awslogs-create-group: 'true'
+
+Outputs:
+  GPUClusterName:
+    Value: !Ref GPUCluster
+  GPUAutoScalingGroupName:
+    Value: !Ref GPUAutoScalingGroup
+    Description: Set DesiredCapacity=1 to start, 0 to stop
+  GPUTaskDefinitionArn:
+    Value: !Ref GPUTaskDefinition
+  GPUSecurityGroupId:
+    Value: !Ref GPUSecurityGroup

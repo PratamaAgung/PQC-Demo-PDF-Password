@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 import os
 
-from app.routes import pdf_routes, grover_routes
+from app.routes import pdf_routes, grover_routes, gpu_routes
 
 app = FastAPI(
     title="PQC Demo - Grover's Algorithm",
@@ -30,6 +30,7 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 app.include_router(pdf_routes.router, prefix="/api/pdf", tags=["PDF"])
 app.include_router(grover_routes.router, prefix="/api/grover", tags=["Grover"])
+app.include_router(gpu_routes.router, prefix="/api/gpu", tags=["GPU Worker"])
 
 
 @app.get("/api/health")
